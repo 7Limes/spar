@@ -2,7 +2,7 @@
 #include <SDL2/SDL_image.h>
 #include <stdio.h>
 #include <stdint.h>
-#include "spar.h"
+#include "../../spar.h"
 
 int main(int argc, char* argv[]) {
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
@@ -54,7 +54,7 @@ int main(int argc, char* argv[]) {
     system->emission_angle = -1.57079632679;
     system->emission_rate = 100;
 
-    system->emission_shape_type = SHAPE_ELLIPSE;
+    system->emission_shape_tag = SHAPE_ELLIPSE;
     system->emission_shape.ellipse = (EmissionShapeEllipse) {20, 20};
 
     system->lifetime = 2.0;

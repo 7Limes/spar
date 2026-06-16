@@ -1,5 +1,6 @@
 #include <raylib.h>
-#include "spar.h"
+#include <time.h>
+#include "../../spar.h"
 
 
 int main(void) {
@@ -26,7 +27,7 @@ int main(void) {
     system->emission_angle = -1.57079632679;
     system->emission_rate = 100;
 
-    system->emission_shape_type = SHAPE_ELLIPSE;
+    system->emission_shape_tag = SHAPE_ELLIPSE;
     system->emission_shape.ellipse = (EmissionShapeEllipse) {20, 20};
 
     system->lifetime = 2.0;
