@@ -1,6 +1,6 @@
 /*
     spar.h - A small 2D particle library
-    v0.1.0
+    v0.1.1
     
     by Miles Burkart
     https://github.com/7Limes
@@ -35,9 +35,13 @@ typedef struct ParVec2 {
     float x, y;
 } ParVec2;
 
+#ifdef RAYLIB_H
+#define ParColor Color
+#else
 typedef struct ParColor {
     unsigned char r, g, b, a;
 } ParColor;
+#endif
 
 
 typedef struct Particle {
@@ -72,16 +76,18 @@ typedef union EmissionShape {
     EmissionShapeLine line;
 } EmissionShape;
 
-typedef enum EmissionShapeType {
+typedef enum EmissionShapeTag {
     SHAPE_RECT,     // A filled rectangle
     SHAPE_ELLIPSE,  // A filled ellipse
     SHAPE_RING,     // A hollow ellipse
     SHAPE_LINE      // A line with a thickness
-} EmissionShapeType;
+} EmissionShapeTag;
 
 typedef enum ParticleSystemFlags {
-    FLAG_GROW = 1 << 0,    // Increase particle array capacity if necessary
-    FLAG_SHRINK = 1 << 1   // Decrease particle array capacity if possible
+    FLAG_GROW = 1 << 0,         // Increase particle array capacity if necessary
+    FLAG_SHRINK = 1 << 1,       // Decrease particle array capacity if possible
+    FLAG_ORDERED = 1 << 2,      // Don't use swap and pop to remove particles from the array (slower but may look better)
+    FLAG_REVERSE_DRAW = 1 << 3  // Draw particles in reverse order (may work well with FLAG_ORDERED)
 } ParticleSystemFlags;
 
 typedef float (*ParEasingFunction)(float);
@@ -89,7 +95,7 @@ typedef float (*ParEasingFunction)(float);
 
 // A system of particles
 typedef struct ParticleSystem {
-    Particle *_particles;           // The array of particles
+    Particle *_particles;          // The array of particles
     size_t count, capacity;        // The length and capacity of the particle array
 
     int flags;                     // Particle system flags
@@ -98,7 +104,7 @@ typedef struct ParticleSystem {
     float _accumulated_time;       // Time accumulator for spawning particles
 
     int emitting;                              // Whether the system is currently emitting
-    EmissionShapeType emission_shape_type;     // The type of emission shape
+    EmissionShapeTag emission_shape_tag;       // The type of emission shape
     EmissionShape emission_shape;              // Emission shape data
     float emission_angle, emission_angle_var;  // The angle to emit towards
     float emission_speed, emission_speed_var;  // The initial speed to apply to each particle
@@ -111,8 +117,8 @@ typedef struct ParticleSystem {
 
     float angular_speed, angular_speed_var;  // The initial angular speed to apply to each particle
 
-    float from_size, to_size;     // The particle sizes
-    ParEasingFunction size_func;  // The easing function to apply to size
+    float from_size, to_size;         // The particle sizes
+    ParEasingFunction size_func;      // The easing function to apply to size
 
     ParColor from_color, to_color;    // The particle colors
     ParEasingFunction color_func;     // The easing function to apply to color 
@@ -193,7 +199,7 @@ static inline float __apply_func(ParEasingFunction func, float value) {
 
 
 // Returns the position of a particle based on its emission shape and base position
-static inline ParVec2 __get_particle_position(EmissionShapeType shape_type, EmissionShape shape, ParVec2 base_pos) {
+static inline ParVec2 __get_particle_position(EmissionShapeTag shape_type, EmissionShape shape, ParVec2 base_pos) {
     ParVec2 pos = {0, 0};
 
     float angle, scale;
@@ -279,7 +285,7 @@ static inline void __add_particle(ParticleSystem *system) {
 
     Particle *par = &system->_particles[system->count];
 
-    par->position = __get_particle_position(system->emission_shape_type, system->emission_shape, system->position);
+    par->position = __get_particle_position(system->emission_shape_tag, system->emission_shape, system->position);
 
     float angle = __vary_float(system->emission_angle, system->emission_angle_var);
     float speed = __vary_float(system->emission_speed, system->emission_speed_var);
@@ -337,6 +343,8 @@ ParticleSystem *create_particle_system(int flags) {
     system->from_color = (ParColor) {255, 255, 255, 255};
     system->to_color = (ParColor) {255, 255, 255, 255};
 
+    system->handle = NULL;
+
     return system;
 }
 
@@ -350,7 +358,7 @@ void free_particle_system(ParticleSystem *system) {
 
 // Updates a particle system
 void update_particle_system(ParticleSystem *system, float delta) {
-
+    system->emission_rate = __clamp_float(system->emission_rate, 0, __FLT_MAX__);
     if (system->emitting) {
         // Spawn new particles
         system->_accumulated_time += delta;
@@ -367,8 +375,17 @@ void update_particle_system(ParticleSystem *system, float delta) {
     for (size_t i = 0; i < system->count; i++) {
         int should_delete = __update_particle(system, &system->_particles[i], delta);
         if (should_delete) {
-            // Swap and pop
-            system->_particles[i] = system->_particles[system->count-1];
+            if (system->flags & FLAG_ORDERED) {
+                // Ordered remove
+                // TODO: mark particles for removal, then do one removal step afterwards
+                for (size_t j = i; j < system->count-1; j++) {
+                    system->_particles[j] = system->_particles[j+1];
+                }
+            }
+            else {
+                // Swap and pop
+                system->_particles[i] = system->_particles[system->count-1];
+            }
             system->count--;
             i--;
 
@@ -391,7 +408,17 @@ void draw_particle(
 
 // Draws a particle system
 void draw_particle_system(ParticleSystem *system) {
-    for (size_t i = 0; i < system->count; i++) {
+    size_t start = 0;
+    size_t end = system->count;
+    int increment = 1;
+
+    if (system->flags & FLAG_REVERSE_DRAW) {
+        start = system->count-1;
+        end = -1;
+        increment = -1;
+    }
+
+    for (long i = start; i != end; i += increment) {
         Particle *par = &system->_particles[i];
         float t = 1 - __clamp_float(par->lifetime / system->lifetime, 0, 1);
         float t_size = __apply_func(system->size_func, t);
@@ -425,12 +452,18 @@ void draw_particle(
     float x, float y, float rotation, float size,
     unsigned char r, unsigned char g, unsigned char b, unsigned char a
 ) {
-    Texture2D *sprite = handle;
-    Rectangle source = {0, 0, sprite->width, sprite->height};
-    Rectangle dest = {x, y, source.width*size, source.height*size};
-    Vector2 origin = {source.width / 2 * size, source.height / 2 * size};
     Color color = {r, g, b, a};
-    DrawTexturePro(*sprite, source, dest, origin, rotation, color);
+    
+    if (handle == NULL) {
+        DrawCircle(x, y, size, color);
+    }
+    else {
+        Texture2D *sprite = handle;
+        Rectangle source = {0, 0, sprite->width, sprite->height};
+        Rectangle dest = {x, y, source.width*size, source.height*size};
+        Vector2 origin = {source.width / 2 * size, source.height / 2 * size};
+        DrawTexturePro(*sprite, source, dest, origin, rotation, color);
+    }
 }
 #endif
 
